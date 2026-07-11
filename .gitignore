@@ -1,0 +1,22 @@
+# بيئة Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ملفات سرية — لا ترفعها أبداً
+.env
+auth_state.json
+
+# ملفات مؤقتة (صور السكرين شوت)
+*.png
+*.jpg
+screenshot*.png
+ss_*.png
+failed_selector.png
+
+# نظام
+.DS_Store
+Thumbs.db
