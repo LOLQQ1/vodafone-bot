@@ -316,7 +316,19 @@ class VodafoneAutomation:
             except Exception:
                 pass
 
-        # ── الخطوة 3: ملء حقل رقم الهاتف ──
+        # ── الخطوة 3: تفعيل الدخول بكلمة المرور (بدلاً من OTP) إذا كان الخيار متاحاً ──
+        for txt in ["كلمة المرور", "بكلمة المرور", "الدخول بكلمة المرور", "Password", "كلمة السر"]:
+            try:
+                loc = self.page.locator(f"text={txt}").first
+                if await loc.is_visible(timeout=2000):
+                    await loc.click()
+                    await asyncio.sleep(1.5)
+                    logger.info(f"Switched to password mode on load using: {txt}")
+                    break
+            except Exception:
+                pass
+
+        # ── الخطوة 4: ملء حقل رقم الهاتف ──
         phone_selectors = [
             "input[name='mobileNumber']",
             "input[name='username']",
@@ -347,8 +359,7 @@ class VodafoneAutomation:
 
         await asyncio.sleep(0.5)
 
-        # ── الخطوة 4: الضغط على "استمرار" للانتقال لشاشة الباسورد ──
-        # الموقع من خطوتين: الرقم أولاً ثم الباسورد
+        # ── الخطوة 5: الضغط على "استمرار" للانتقال لشاشة الباسورد ──
         continue_clicked = False
         continue_selectors = [
             "input[type='submit']",
@@ -373,9 +384,49 @@ class VodafoneAutomation:
                     continue_clicked = True
                     break
 
-        await asyncio.sleep(2.5)
+        await asyncio.sleep(3.0)
 
-        # ── الخطوة 5: ملء كلمة المرور (تظهر بعد "استمرار") ──
+        # ── الخطوة 6: التعامل مع شاشة OTP والتحويل لكلمة المرور ──
+        # إذا تم تحويلنا لشاشة الرمز المؤقت (OTP)، سنحاول الضغط على "الدخول بكلمة المرور"
+        content = await self.page.content()
+        is_otp = "الرمز السري" in content or "OTP" in content or "مرة واحدة" in content or await self.page.locator("input#try1").is_visible(timeout=1000)
+
+        if is_otp:
+            logger.info("OTP screen detected instead of password. Trying to switch to Password login...")
+            switched = False
+            for txt in ["كلمة المرور", "بكلمة المرور", "الدخول بكلمة المرور", "Password", "كلمة السر"]:
+                try:
+                    # قد يكون رابطاً نصياً أو زراً
+                    loc = self.page.locator(f"text={txt}").first
+                    if await loc.is_visible(timeout=3000):
+                        await loc.click()
+                        await asyncio.sleep(3.0)
+                        logger.info(f"Switched from OTP to Password login via: {txt}")
+                        switched = True
+                        break
+                except Exception:
+                    pass
+            
+            if not switched:
+                # محاولة الضغط على أول رابط يحتوي كلمة مرور بالـ evaluate
+                try:
+                    await self.page.evaluate("""() => {
+                        const links = [...document.querySelectorAll('a, button, span, div')];
+                        const pwdLink = links.find(el => 
+                            el.innerText && (
+                                el.innerText.includes('كلمة المرور') || 
+                                el.innerText.includes('password') || 
+                                el.innerText.includes('كلمة السر')
+                            )
+                        );
+                        if (pwdLink) pwdLink.click();
+                    }""")
+                    await asyncio.sleep(3.0)
+                    logger.info("Tried JS-based switch to password login.")
+                except Exception as e:
+                    logger.warning(f"JS switch failed: {e}")
+
+        # ── الخطوة 7: ملء كلمة المرور ──
         password_selectors = [
             "input[name='password']",
             "input#password",
@@ -398,13 +449,13 @@ class VodafoneAutomation:
             ss = await self._screenshot("login_no_pass_field")
             els = await self.get_interactive_elements()
             raise SelectorNotFoundError(
-                "لم يُعثَر على حقل كلمة المرور بعد الضغط على استمرار",
+                "لم يُعثَر على حقل كلمة المرور بعد محاولة التحويل لشاشة الباسورد",
                 ss, els,
             )
 
         await asyncio.sleep(0.5)
 
-        # ── الخطوة 6: تسجيل الدخول النهائي ──
+        # ── الخطوة 8: تسجيل الدخول النهائي ──
         submit_selectors = [
             "input[type='submit']",
             "button[type='submit']",
@@ -423,7 +474,7 @@ class VodafoneAutomation:
                 if await self._click_text(txt, timeout=3000):
                     break
 
-        # ── الخطوة 7: انتظار إتمام الدخول ──
+        # ── الخطوة 9: انتظار إتمام الدخول ──
         await asyncio.sleep(4)
 
         content = await self.page.content()
