@@ -316,15 +316,14 @@ class VodafoneAutomation:
             except Exception:
                 pass
 
-        # ── الخطوة 3: ملء حقل رقم الهاتف (username) ──
-        # Keycloak يستخدم input[name='username'] أو input#username
+        # ── الخطوة 3: ملء حقل رقم الهاتف ──
         phone_selectors = [
+            "input[name='mobileNumber']",
             "input[name='username']",
             "input#username",
-            "input#kc-form-login",
-            "input[autocomplete='username']",
-            "input[type='text']:visible",
+            "input[class*='mobile']",
             "input[type='tel']",
+            "input[type='text']:visible",
         ]
 
         phone_filled = False
@@ -342,14 +341,41 @@ class VodafoneAutomation:
             ss = await self._screenshot("login_no_phone_field")
             els = await self.get_interactive_elements()
             raise SelectorNotFoundError(
-                "لم يُعثَر على حقل رقم الهاتف في صفحة تسجيل الدخول\n"
-                "تأكد أن الضغط على أيقونة الحساب يفتح صفحة الدخول",
+                "لم يُعثَر على حقل رقم الهاتف في صفحة تسجيل الدخول",
                 ss, els,
             )
 
         await asyncio.sleep(0.5)
 
-        # ── الخطوة 4: ملء كلمة المرور ──
+        # ── الخطوة 4: الضغط على "استمرار" للانتقال لشاشة الباسورد ──
+        # الموقع من خطوتين: الرقم أولاً ثم الباسورد
+        continue_clicked = False
+        continue_selectors = [
+            "input[type='submit']",
+            "input[class*='mobile-trigg']",
+            "button[type='submit']",
+            ".btn-primary",
+            "#kc-login",
+        ]
+        for sel in continue_selectors:
+            try:
+                await self.page.wait_for_selector(sel, timeout=3000)
+                await self.page.click(sel)
+                continue_clicked = True
+                logger.info(f"Continue clicked via: {sel}")
+                break
+            except Exception:
+                continue
+
+        if not continue_clicked:
+            for txt in ["استمرار", "التالي", "متابعة", "Continue", "Next"]:
+                if await self._click_text(txt, timeout=2000):
+                    continue_clicked = True
+                    break
+
+        await asyncio.sleep(2.5)
+
+        # ── الخطوة 5: ملء كلمة المرور (تظهر بعد "استمرار") ──
         password_selectors = [
             "input[name='password']",
             "input#password",
@@ -360,7 +386,7 @@ class VodafoneAutomation:
         password_filled = False
         for sel in password_selectors:
             try:
-                await self.page.wait_for_selector(sel, state="visible", timeout=5000)
+                await self.page.wait_for_selector(sel, state="visible", timeout=8000)
                 await self.page.fill(sel, password)
                 password_filled = True
                 logger.info(f"Password filled with selector: {sel}")
@@ -372,49 +398,42 @@ class VodafoneAutomation:
             ss = await self._screenshot("login_no_pass_field")
             els = await self.get_interactive_elements()
             raise SelectorNotFoundError(
-                "لم يُعثَر على حقل كلمة المرور",
+                "لم يُعثَر على حقل كلمة المرور بعد الضغط على استمرار",
                 ss, els,
             )
 
         await asyncio.sleep(0.5)
 
-        # ── الخطوة 5: تسجيل الدخول ──
-        # Keycloak زر الدخول عادة: input[type='submit'] أو button[type='submit']
+        # ── الخطوة 6: تسجيل الدخول النهائي ──
         submit_selectors = [
             "input[type='submit']",
             "button[type='submit']",
             "#kc-login",
             ".btn-primary",
         ]
-        submitted = False
         for sel in submit_selectors:
             try:
                 await self.page.wait_for_selector(sel, timeout=3000)
                 await self.page.click(sel)
-                submitted = True
                 break
             except Exception:
                 continue
-
-        if not submitted:
-            # جرب بالنص
-            for txt in ["دخول", "تسجيل الدخول", "Login", "Sign In", "إرسال"]:
+        else:
+            for txt in ["دخول", "تسجيل الدخول", "Login", "Sign In"]:
                 if await self._click_text(txt, timeout=3000):
-                    submitted = True
                     break
 
-        # ── الخطوة 6: انتظار إتمام الدخول ──
+        # ── الخطوة 7: انتظار إتمام الدخول ──
         await asyncio.sleep(4)
 
-        # تحقق من نجاح الدخول (نرجع لصفحة الهوم بعد الدخول)
-        current_url = self.page.url
         content = await self.page.content()
+        current_url = self.page.url
 
         if "خطأ" in content or "غير صحيح" in content or "Invalid" in content:
             raise ValueError("رقم الهاتف أو كلمة المرور غير صحيحة — تأكد من البيانات وحاول مرة أخرى")
 
         await self.save_state()
-        logger.info(f"Login done. Current URL: {current_url}")
+        logger.info(f"Login done. URL: {current_url}")
         return await self._screenshot("after_login")
 
     # ── الخطوات الخمس ───────────────────────────
