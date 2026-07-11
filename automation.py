@@ -1,11 +1,9 @@
 """
-automation.py — محرك Playwright لأتمتة أنا فودافون
-=======================================================
-يدعم:
-  - سياق Desktop (الموقع) + Mobile (التطبيق)
-  - تبديل سلس بين الوضعين مع حفظ الجلسة
-  - تشخيص أسباب العطل بالعربي
-  - run_full_workflow() — يشغّل الخطوات 1→5 بالكامل مع Callback للتقدم
+automation.py — محرك Playwright لأتمتة موقع وتطبيق أنا فودافون
+================================================================
+- تسجيل دخول برقم الهاتف + كلمة المرور
+- سياق Desktop للموقع + Mobile للتطبيق
+- تنفيذ الخطوات 1→5 بشكل سلس كامل
 """
 
 import asyncio
@@ -44,9 +42,9 @@ class PageLoadError(Exception):
 class StepResult:
     step: int
     success: bool
-    message: str                       # رسالة بالعربي
-    screenshot: str = ""               # مسار الصورة
-    offer_used: str = ""               # العرض المُستخدَم (للخطوة 2)
+    message: str
+    screenshot: str = ""
+    offer_used: str = ""
     interactive_elements: list = field(default_factory=list)
 
 
@@ -55,7 +53,7 @@ class StepResult:
 # ─────────────────────────────────────────────
 class VodafoneAutomation:
 
-    def __init__(self, headless: bool = True, timeout: int = 15000,
+    def __init__(self, headless: bool = True, timeout: int = 20000,
                  state_file: str = "auth_state.json"):
         self.headless   = headless
         self.timeout    = timeout
@@ -77,22 +75,36 @@ class VodafoneAutomation:
             self.playwright = await async_playwright().start()
             self.browser = await self.playwright.chromium.launch(
                 headless=self.headless,
-                args=["--disable-blink-features=AutomationControlled",
-                      "--no-sandbox"],
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                ],
             )
             await self._create_context(is_mobile=False)
 
     async def stop(self):
-        for attr in ("context", "browser", "playwright"):
-            obj = getattr(self, attr, None)
-            if obj:
-                try:
-                    await obj.close() if attr != "playwright" else await obj.stop()
-                except Exception:
-                    pass
-                setattr(self, attr, None)
+        if self.context:
+            try:
+                await self.context.close()
+            except Exception:
+                pass
+            self.context = None
+        if self.browser:
+            try:
+                await self.browser.close()
+            except Exception:
+                pass
+            self.browser = None
+        if self.playwright:
+            try:
+                await self.playwright.stop()
+            except Exception:
+                pass
+            self.playwright = None
 
     async def _create_context(self, is_mobile: bool = False):
+        """ينشئ سياق متصفح جديد (Desktop أو Mobile) مع حفظ الجلسة."""
         if self.context:
             try:
                 await self.context.storage_state(path=self.state_file)
@@ -105,8 +117,10 @@ class VodafoneAutomation:
         if is_mobile:
             device = self.playwright.devices["Pixel 5"]
             self.context = await self.browser.new_context(
-                **device, storage_state=storage,
-                locale="ar-EG", timezone_id="Africa/Cairo",
+                **device,
+                storage_state=storage,
+                locale="ar-EG",
+                timezone_id="Africa/Cairo",
             )
         else:
             self.context = await self.browser.new_context(
@@ -117,7 +131,8 @@ class VodafoneAutomation:
                     "Chrome/124.0.0.0 Safari/537.36"
                 ),
                 storage_state=storage,
-                locale="ar-EG", timezone_id="Africa/Cairo",
+                locale="ar-EG",
+                timezone_id="Africa/Cairo",
             )
 
         self.is_mobile = is_mobile
@@ -126,62 +141,74 @@ class VodafoneAutomation:
         logger.info("Context → %s", "Mobile" if is_mobile else "Desktop")
 
     async def switch_context(self, to_mobile: bool):
+        """يبدّل بين وضع Desktop و Mobile."""
         if self.is_mobile != to_mobile:
-            await _create_context := self._create_context
-            await _create_context(is_mobile=to_mobile)
+            await self._create_context(is_mobile=to_mobile)
 
     async def save_state(self):
         if self.context:
             await self.context.storage_state(path=self.state_file)
 
-    # ── مساعدات التفاعل ─────────────────────────
+    # ── مساعدات ──────────────────────────────────
 
     async def _goto(self, path: str, wait: float = 3.0):
-        """ينتقل لصفحة ويتحقق من التحميل."""
         url = f"{self.base_url}{path}"
         try:
             await self.page.goto(url, wait_until="domcontentloaded",
                                  timeout=self.timeout)
             await asyncio.sleep(wait)
         except PlaywrightTimeoutError:
-            ss = await self._screenshot("load_error")
             raise PageLoadError(f"فشل تحميل الصفحة: {url}")
 
-    async def _click_text(self, text: str, timeout: int = None,
-                          context_label: str = "") -> bool:
-        """ينقر على عنصر يحتوي النص — يرجع False لو ما وُجد."""
+    async def _dismiss_cookies(self):
+        """يغلق نافذة الكوكيز إذا ظهرت."""
+        for txt in ["قبول كل الملفات", "قبول", "Accept All", "موافق"]:
+            try:
+                loc = self.page.get_by_text(txt, exact=False).first
+                if await loc.is_visible(timeout=2000):
+                    await loc.click()
+                    await asyncio.sleep(1)
+                    return
+            except Exception:
+                pass
+
+    async def _click_text(self, text: str, timeout: int = None) -> bool:
         t = timeout or self.timeout
         try:
             loc = self.page.get_by_text(text, exact=False).first
             await loc.wait_for(state="visible", timeout=t)
             await loc.click()
             return True
-        except PlaywrightTimeoutError:
+        except Exception:
             return False
 
-    async def _click_text_or_raise(self, text: str, error_msg: str,
-                                   timeout: int = None):
-        """ينقر أو يرفع SelectorNotFoundError."""
-        if not await self._click_text(text, timeout=timeout):
-            ss = await self._screenshot("not_found")
-            elements = await self.get_interactive_elements()
-            raise SelectorNotFoundError(error_msg, ss, elements)
+    async def _click_selector(self, selector: str, timeout: int = None) -> bool:
+        t = timeout or self.timeout
+        try:
+            await self.page.wait_for_selector(selector, timeout=t)
+            await self.page.click(selector)
+            return True
+        except Exception:
+            return False
 
     async def _screenshot(self, name: str = "shot") -> str:
-        path = f"{name}_{int(asyncio.get_event_loop().time())}.png"
+        path = f"{name}.png"
         try:
-            await self.page.screenshot(path=path, full_page=False)
+            await self.page.screenshot(path=path)
         except Exception:
             pass
         return path
 
     async def get_screenshot(self, path: str = "screenshot.png") -> str:
-        await self.page.screenshot(path=path)
+        try:
+            await self.page.screenshot(path=path)
+        except Exception:
+            pass
         return path
 
     async def get_interactive_elements(self) -> list:
         try:
-            return await self.page.evaluate("""() => {
+            return await self.page.evaluate(r"""() => {
                 const sel = 'button,a,input,select,textarea,[role="button"],[onclick]';
                 return [...document.querySelectorAll(sel)]
                     .map((el, i) => {
@@ -191,7 +218,7 @@ class VodafoneAutomation:
                                  el.getAttribute('aria-label') || '').trim()
                                  .replace(/\s+/g,' ').substring(0,50);
                         if (!t && el.tagName==='INPUT')
-                            t = `Input[${el.type}] ${el.name||el.id||''}`;
+                            t = 'Input[' + el.type + '] ' + (el.name||el.id||'');
                         return t ? {index:i, tagName:el.tagName, text:t} : null;
                     }).filter(Boolean);
             }""")
@@ -211,160 +238,196 @@ class VodafoneAutomation:
         await self.page.keyboard.insert_text(text)
         await asyncio.sleep(0.5)
 
-    # ── تسجيل الدخول ────────────────────────────
+    # ── تسجيل الدخول برقم الهاتف + كلمة المرور ──
 
-    async def go_to_login(self, phone: str) -> str:
-        """يفتح صفحة الدخول ويدخل رقم الهاتف — يرجع مسار سكرين شوت."""
-        if self.is_mobile:
-            await self._create_context(is_mobile=False)
-
+    async def login(self, phone: str, password: str) -> str:
+        """
+        يسجّل الدخول برقم الهاتف وكلمة المرور مباشرة.
+        يرجع مسار لقطة الشاشة بعد الدخول.
+        """
+        await self._create_context(is_mobile=False)
         await self._goto("/ar/home", wait=3)
+        await self._dismiss_cookies()
 
-        # 1. إغلاق أو قبول الكوكيز إذا ظهرت
-        for cookie_btn in ["قبول كل الملفات", "قبول", "Accept All", "reject", "رفض"]:
-            try:
-                if await self._click_text(cookie_btn, timeout=2000):
-                    await asyncio.sleep(1)
-                    break
-            except Exception:
-                pass
+        # ── محاولة فتح صفحة الدخول ──
+        login_opened = False
 
-        # 2. الضغط على أيقونة الحساب (شكل الشخص أعلى اليسار) أو كلمة دخول
-        # سنجرب الضغط على أيقونة الشخص عبر الكلاس أو الرول أو النص
-        profile_clicked = False
-        profile_selectors = [
-            ".profile-icon", "a.login-btn", "a[href*='login']",
-            "header i.icon-user", "header .user-icon", ".nav-link:has-text('دخول')",
-            "header a:has-text('دخول')"
-        ]
-        
-        # جرب الضغط بالنص أولاً
-        if await self._click_text("دخول", timeout=3000):
-            profile_clicked = True
-            await asyncio.sleep(1.5)
-            
-        if not profile_clicked:
-            for selector in profile_selectors:
-                try:
-                    loc = self.page.locator(selector).first
-                    if await loc.is_visible(timeout=1500):
-                        await loc.click()
-                        profile_clicked = True
-                        await asyncio.sleep(2)
-                        break
-                except Exception:
-                    pass
-
-        # لو لم يفلح أي مما سبق، سنضغط على الأيقونة بناء على إحداثياتها أو ننتقل لصفحة الدخول مباشرة
-        if not profile_clicked:
-            try:
-                # محاولة الانتقال لصفحة تسجيل الدخول مباشرة بالرابط
-                await self.page.goto(f"{self.base_url}/ar/home?login=true", timeout=8000)
-                await asyncio.sleep(2)
-            except Exception:
-                pass
-
-        # حقل الهاتف
-        phone_sel = ("input[name='username'],input#username,"
-                     "input#mobileNum,input[placeholder*='رقم'],"
-                     "input[type='tel']")
+        # طريقة 1: رابط مباشر لصفحة الدخول
         try:
-            await self.page.wait_for_selector(phone_sel, timeout=10000)
-            await self.page.fill(phone_sel, phone)
-        except PlaywrightTimeoutError:
+            await self.page.goto(
+                f"{self.base_url}/ar/my-account/login",
+                wait_until="domcontentloaded", timeout=8000
+            )
+            await asyncio.sleep(2)
+            login_opened = True
+        except Exception:
+            pass
+
+        # طريقة 2: الضغط على أيقونة الحساب أو كلمة دخول
+        if not login_opened:
+            selectors_to_try = [
+                "a[href*='login']",
+                ".profile-icon", ".user-icon",
+                "header .icon-user",
+                "header button:has-text('دخول')",
+                "header a:has-text('دخول')",
+                ".login-link",
+            ]
+            for sel in selectors_to_try:
+                if await self._click_selector(sel, timeout=2000):
+                    await asyncio.sleep(2)
+                    login_opened = True
+                    break
+
+            if not login_opened:
+                await self._click_text("دخول", timeout=4000)
+                await asyncio.sleep(2)
+
+        await self._dismiss_cookies()
+
+        # ── إدخال رقم الهاتف ──
+        phone_selectors = [
+            "input[name='username']",
+            "input#username",
+            "input#mobileNum",
+            "input[placeholder*='رقم']",
+            "input[placeholder*='هاتف']",
+            "input[type='tel']",
+            "input[type='text']:visible",
+        ]
+        phone_filled = False
+        for sel in phone_selectors:
+            try:
+                await self.page.wait_for_selector(sel, timeout=5000)
+                await self.page.fill(sel, phone)
+                phone_filled = True
+                logger.info(f"Phone filled using: {sel}")
+                break
+            except Exception:
+                continue
+
+        if not phone_filled:
+            ss = await self._screenshot("login_no_phone_field")
+            els = await self.get_interactive_elements()
             raise SelectorNotFoundError(
                 "لم يُعثَر على حقل رقم الهاتف في صفحة تسجيل الدخول",
-                await self._screenshot("login_field"),
-                await self.get_interactive_elements(),
+                ss, els,
             )
 
-        # زر إرسال OTP
-        otp_btn = ("button[type='submit'],"
-                   "button:has-text('كلمة المرور المؤقتة'),"
-                   "button:has-text('أرسل الكود'),"
-                   "button:has-text('دخول')")
-        try:
-            await self.page.wait_for_selector(otp_btn, timeout=6000)
-            await self.page.click(otp_btn)
-        except PlaywrightTimeoutError:
+        await asyncio.sleep(0.5)
+
+        # ── النقر على "التالي" أو "متابعة" ──
+        next_clicked = False
+        for txt in ["التالي", "متابعة", "Continue", "Next"]:
+            if await self._click_text(txt, timeout=3000):
+                next_clicked = True
+                await asyncio.sleep(2)
+                break
+
+        if not next_clicked:
+            for sel in ["button[type='submit']", "button.next-btn", ".btn-primary"]:
+                if await self._click_selector(sel, timeout=2000):
+                    await asyncio.sleep(2)
+                    break
+
+        # ── إدخال كلمة المرور ──
+        password_selectors = [
+            "input[name='password']",
+            "input#password",
+            "input[type='password']",
+            "input[placeholder*='كلمة']",
+            "input[placeholder*='password']",
+        ]
+        password_filled = False
+        for sel in password_selectors:
+            try:
+                await self.page.wait_for_selector(sel, timeout=8000)
+                await self.page.fill(sel, password)
+                password_filled = True
+                logger.info(f"Password filled using: {sel}")
+                break
+            except Exception:
+                continue
+
+        if not password_filled:
+            ss = await self._screenshot("login_no_pass_field")
+            els = await self.get_interactive_elements()
             raise SelectorNotFoundError(
-                "لم يُعثَر على زر طلب كود التحقق",
-                await self._screenshot("otp_btn"),
-                await self.get_interactive_elements(),
+                "لم يُعثَر على حقل كلمة المرور",
+                ss, els,
             )
 
-        await asyncio.sleep(2)
-        return await self._screenshot("after_phone")
+        await asyncio.sleep(0.5)
 
-    async def submit_otp(self, otp: str) -> str:
-        otp_sel = ("input#otp,input[name='otp'],"
-                   "input[placeholder*='رمز'],input[placeholder*='كود'],"
-                   "input[type='number'][maxlength]")
-        try:
-            await self.page.wait_for_selector(otp_sel, timeout=10000)
-            await self.page.fill(otp_sel, otp)
-        except PlaywrightTimeoutError:
-            raise SelectorNotFoundError(
-                "لم يُعثَر على حقل إدخال كود التحقق",
-                await self._screenshot("otp_field"),
-                await self.get_interactive_elements(),
-            )
+        # ── تسجيل الدخول ──
+        submit_clicked = False
+        for txt in ["دخول", "تسجيل الدخول", "Login", "Sign In"]:
+            if await self._click_text(txt, timeout=3000):
+                submit_clicked = True
+                await asyncio.sleep(3)
+                break
 
-        submit = ("button[type='submit'],"
-                  "button:has-text('تأكيد'),"
-                  "button:has-text('دخول')")
-        try:
-            await self.page.wait_for_selector(submit, timeout=5000)
-            await self.page.click(submit)
-        except PlaywrightTimeoutError:
-            pass  # قد تكون النموذج تلقائي
+        if not submit_clicked:
+            for sel in ["button[type='submit']", ".login-btn", ".btn-login"]:
+                if await self._click_selector(sel, timeout=2000):
+                    await asyncio.sleep(3)
+                    break
 
-        await asyncio.sleep(5)
-
-        # تحقق من وجود خطأ في الصفحة
+        # ── التحقق من نجاح الدخول ──
+        await asyncio.sleep(3)
         content = await self.page.content()
-        if "خطأ" in content or "غير صحيح" in content or "error" in content.lower():
-            raise ValueError("كود التحقق خاطئ أو منتهي الصلاحية")
+
+        if "خطأ" in content or "غير صحيح" in content or "incorrect" in content.lower():
+            raise ValueError("رقم الهاتف أو كلمة المرور غير صحيحة")
 
         await self.save_state()
+        logger.info("Login successful!")
         return await self._screenshot("after_login")
 
     # ── الخطوات الخمس ───────────────────────────
 
-    async def run_step_1(self) -> StepResult:
-        """
-        الخطوة 1 — الموقع (Desktop):
-        الاشتراك في باقة بلس كومبو 600
-        """
-        if self.is_mobile:
-            await self._create_context(is_mobile=False)
-
+    async def _subscribe_plus_combo(self) -> bool:
+        """يشترك في بلس كومبو 600 — يُستخدم في الخطوتين 1 و3."""
         await self._goto("/ar/internet/plus", wait=4)
+        await self._dismiss_cookies()
 
-        # ابحث عن بلس كومبو 600
-        found = await self._click_text("بلس كومبو 600", timeout=10000)
-        if not found:
-            # جرّب اسم أقصر
-            found = await self._click_text("بلس كومبو", timeout=5000)
-        if not found:
-            ss = await self._screenshot("step1_notfound")
+        for name in ["بلس كومبو 600", "Plus Combo 600", "بلس كومبو"]:
+            if await self._click_text(name, timeout=6000):
+                await asyncio.sleep(2)
+                break
+
+        for btn in ["اشترك الآن", "اشترك", "الاشتراك", "Subscribe"]:
+            if await self._click_text(btn, timeout=5000):
+                await asyncio.sleep(3)
+                return True
+
+        return False
+
+    async def _repurchase(self) -> bool:
+        """يضغط على إعادة شراء."""
+        for txt in ["إعادة شراء", "تجديد الباقة", "تجديد", "Renew"]:
+            if await self._click_text(txt, timeout=8000):
+                await asyncio.sleep(2)
+                for confirm in ["تأكيد", "موافق", "نعم", "Confirm"]:
+                    if await self._click_text(confirm, timeout=4000):
+                        await asyncio.sleep(3)
+                        return True
+                return True
+        return False
+
+    async def run_step_1(self) -> StepResult:
+        """الخطوة 1 — الموقع (Desktop): الاشتراك في بلس كومبو 600"""
+        await self.switch_context(to_mobile=False)
+        ok = await self._subscribe_plus_combo()
+
+        if not ok:
+            ss = await self._screenshot("step1_fail")
             els = await self.get_interactive_elements()
             raise SelectorNotFoundError(
-                "باقة بلس كومبو 600 غير موجودة في الصفحة — "
-                "ربما تغير اسمها أو الصفحة لم تُحمَّل",
+                "لم يُعثَر على باقة بلس كومبو 600 أو زر الاشتراك في الصفحة",
                 ss, els,
             )
 
-        await asyncio.sleep(2)
-
-        # زر اشترك / الاشتراك
-        ok = await self._click_text("اشترك", timeout=6000)
-        if not ok:
-            ok = await self._click_text("الاشتراك", timeout=4000)
-        if not ok:
-            ok = await self._click_text("تأكيد", timeout=4000)
-
-        await asyncio.sleep(3)
         ss = await self._screenshot("step1_done")
         return StepResult(
             step=1, success=True,
@@ -373,53 +436,48 @@ class VodafoneAutomation:
         )
 
     async def run_step_2(self) -> StepResult:
-        """
-        الخطوة 2 — التطبيق (Mobile):
-        اشترك في 1400 ميجا بـ28 جنيه؛ إذا غير موجود → ميجابايتس أكتر
-        """
-        await self._create_context(is_mobile=True)
+        """الخطوة 2 — التطبيق (Mobile): 1400 ميجا بـ28 جنيه أو ميجابايتس أكتر"""
+        await self.switch_context(to_mobile=True)
         await self._goto("/ar/offers", wait=4)
+        await self._dismiss_cookies()
 
         content = await self.page.content()
         offer_used = ""
 
-        # محاولة 1: عرض 28 جنيه
-        has_28   = "28"   in content and "1400" in content
-        has_more = "ميجابايتس أكتر" in content or "أكتر" in content
-
-        if has_28:
-            clicked = await self._click_text("1400", timeout=6000)
-            if not clicked:
-                clicked = await self._click_text("28", timeout=5000)
+        # جرب عرض 28 جنيه
+        if "28" in content and "1400" in content:
+            clicked = (
+                await self._click_text("1400 ميجابايت", timeout=5000) or
+                await self._click_text("1400 ميجا", timeout=3000) or
+                await self._click_text("28 جنيه", timeout=3000)
+            )
             if clicked:
                 await asyncio.sleep(2)
                 await self._click_text("اشترك", timeout=5000) or \
                     await self._click_text("الاشتراك", timeout=3000)
                 offer_used = "1400 ميجابايت بـ28 جنيه"
-            else:
-                has_28 = False  # فشل النقر، جرب البديل
 
-        if not has_28:
-            if has_more:
-                clicked = await self._click_text("ميجابايتس أكتر", timeout=6000)
-                if not clicked:
-                    clicked = await self._click_text("أكتر", timeout=4000)
+        # لو مش موجود، جرب ميجابايتس أكتر
+        if not offer_used:
+            content = await self.page.content()
+            if "ميجابايتس أكتر" in content or "أكتر" in content:
+                clicked = (
+                    await self._click_text("ميجابايتس أكتر", timeout=5000) or
+                    await self._click_text("أكتر", timeout=3000)
+                )
                 if clicked:
                     await asyncio.sleep(2)
                     await self._click_text("اشترك", timeout=5000) or \
                         await self._click_text("الاشتراك", timeout=3000)
                     offer_used = "ميجابايتس أكتر على باقة 37 جنيه"
-                else:
-                    has_more = False
 
-        if not has_28 and not has_more:
+        if not offer_used:
             ss = await self._screenshot("step2_no_offers")
             els = await self.get_interactive_elements()
             raise OfferNotFoundError(
                 "⚠️ لم يُعثَر على عروض الخصم على هذا الخط!\n\n"
-                "السبب المرجّح: الخط لا يملك عروض خصم مؤهلة حالياً.\n"
-                "الحل: تأكد أن الخط يحتوي على عرض 1400 ميجا بـ28 جنيه "
-                "أو عرض ميجابايتس أكتر قبل تشغيل الطريقة."
+                "السبب: الخط لا يملك عرض 1400 ميجا بـ28 جنيه أو ميجابايتس أكتر حالياً.\n"
+                "الحل: تأكد من توفر أحد هذين العرضين على الخط أولاً."
             )
 
         await asyncio.sleep(3)
@@ -431,46 +489,26 @@ class VodafoneAutomation:
         )
 
     async def run_step_3(self) -> StepResult:
-        """
-        الخطوة 3 — الموقع (Desktop):
-        اشتراك ثانٍ في بلس كومبو 600 + إعادة شراء
-        """
-        await self._create_context(is_mobile=False)
-        await self._goto("/ar/internet/plus", wait=4)
+        """الخطوة 3 — الموقع (Desktop): اشتراك ثانٍ في بلس كومبو 600 + إعادة شراء"""
+        await self.switch_context(to_mobile=False)
 
-        # اشتراك ثانٍ
-        found = await self._click_text("بلس كومبو 600", timeout=8000)
-        if not found:
-            found = await self._click_text("بلس كومبو", timeout=5000)
-        if not found:
-            ss = await self._screenshot("step3_notfound")
+        ok = await self._subscribe_plus_combo()
+        if not ok:
+            ss = await self._screenshot("step3_sub_fail")
             els = await self.get_interactive_elements()
             raise SelectorNotFoundError(
-                "لم يُعثَر على باقة بلس كومبو 600 للمرة الثانية",
+                "لم يُعثَر على بلس كومبو 600 للاشتراك الثاني",
                 ss, els,
             )
 
-        await asyncio.sleep(2)
-        await self._click_text("اشترك", timeout=6000) or \
-            await self._click_text("الاشتراك", timeout=4000)
-        await asyncio.sleep(3)
-
-        # إعادة شراء
-        repurchased = await self._click_text("إعادة شراء", timeout=8000)
-        if not repurchased:
-            repurchased = await self._click_text("تجديد", timeout=5000)
+        repurchased = await self._repurchase()
         if not repurchased:
             ss = await self._screenshot("step3_repurchase_fail")
             els = await self.get_interactive_elements()
             raise SelectorNotFoundError(
-                "لم يُعثَر على زر 'إعادة شراء' أو 'تجديد' بعد الاشتراك",
+                "لم يُعثَر على زر إعادة الشراء بعد الاشتراك الثاني",
                 ss, els,
             )
-
-        await asyncio.sleep(2)
-        # تأكيد النافذة
-        await self._click_text("تأكيد", timeout=5000)
-        await asyncio.sleep(3)
 
         ss = await self._screenshot("step3_done")
         return StepResult(
@@ -480,43 +518,41 @@ class VodafoneAutomation:
         )
 
     async def run_step_4(self) -> StepResult:
-        """
-        الخطوة 4 — التطبيق (Mobile):
-        الاشتراك في 1400 ميجابايت بـ19 جنيه
-        """
-        await self._create_context(is_mobile=True)
+        """الخطوة 4 — التطبيق (Mobile): 1400 ميجابايت بـ19 جنيه"""
+        await self.switch_context(to_mobile=True)
         await self._goto("/ar/offers", wait=4)
+        await self._dismiss_cookies()
 
         content = await self.page.content()
 
-        # تحقق وجود عرض 19 جنيه
-        has_19 = "19" in content and "1400" in content
-
-        if not has_19:
+        if "19" not in content or "1400" not in content:
             ss = await self._screenshot("step4_no_19")
             els = await self.get_interactive_elements()
             raise OfferNotFoundError(
                 "⚠️ عرض 1400 ميجابايت بـ19 جنيه غير موجود الآن!\n\n"
                 "الأسباب المحتملة:\n"
-                "• الخطوات السابقة لم تُنفَّذ بالترتيب الصحيح\n"
-                "• العرض ظهر بعد فترة — انتظر دقيقة وأعد المحاولة\n"
-                "• الخط غير مؤهل لهذا العرض في الوقت الحالي"
+                "• الخطوات السابقة لم تكتمل بالترتيب الصحيح\n"
+                "• العرض لم يظهر بعد — انتظر دقيقة وأعد المحاولة\n"
+                "• الخط غير مؤهل لهذا العرض"
             )
 
-        clicked = await self._click_text("19", timeout=8000)
-        if not clicked:
-            clicked = await self._click_text("1400", timeout=5000)
+        clicked = (
+            await self._click_text("1400 ميجابايت", timeout=6000) or
+            await self._click_text("19 جنيه", timeout=4000) or
+            await self._click_text("1400", timeout=4000)
+        )
+
         if not clicked:
             ss = await self._screenshot("step4_click_fail")
             els = await self.get_interactive_elements()
             raise SelectorNotFoundError(
-                "عرض 19 جنيه موجود في الصفحة لكن لم يمكن النقر عليه",
+                "عرض 19 جنيه موجود لكن لم يمكن النقر عليه",
                 ss, els,
             )
 
         await asyncio.sleep(2)
-        await self._click_text("اشترك", timeout=6000) or \
-            await self._click_text("الاشتراك", timeout=4000)
+        await self._click_text("اشترك", timeout=5000) or \
+            await self._click_text("الاشتراك", timeout=3000)
         await asyncio.sleep(3)
 
         ss = await self._screenshot("step4_done")
@@ -527,29 +563,19 @@ class VodafoneAutomation:
         )
 
     async def run_step_5(self) -> StepResult:
-        """
-        الخطوة 5 — الموقع (Desktop):
-        إعادة شراء نهائية لبلس كومبو 600
-        """
-        await self._create_context(is_mobile=False)
+        """الخطوة 5 — الموقع (Desktop): إعادة شراء نهائية لبلس كومبو 600"""
+        await self.switch_context(to_mobile=False)
         await self._goto("/ar/internet/plus", wait=4)
+        await self._dismiss_cookies()
 
-        repurchased = await self._click_text("إعادة شراء", timeout=10000)
+        repurchased = await self._repurchase()
         if not repurchased:
-            repurchased = await self._click_text("تجديد", timeout=6000)
-
-        if not repurchased:
-            ss = await self._screenshot("step5_notfound")
+            ss = await self._screenshot("step5_fail")
             els = await self.get_interactive_elements()
             raise SelectorNotFoundError(
-                "لم يُعثَر على زر 'إعادة شراء' في الخطوة الأخيرة.\n"
-                "ربما لم تكتمل إعادة الشراء في الخطوة 3 بشكل صحيح.",
+                "لم يُعثَر على زر إعادة الشراء في الخطوة الأخيرة",
                 ss, els,
             )
-
-        await asyncio.sleep(2)
-        await self._click_text("تأكيد", timeout=5000)
-        await asyncio.sleep(3)
 
         ss = await self._screenshot("step5_done")
         return StepResult(
@@ -562,27 +588,29 @@ class VodafoneAutomation:
 
     async def run_verification(self):
         """
-        يفحص الاشتراكات القادمة ويرجع:
-        (نجاح: bool, السعر: str, مسار_الصورة: str)
+        يفحص الاشتراكات القادمة.
+        يرجع: (نجاح: bool, السعر: str, مسار_الصورة: str)
         """
-        await self._create_context(is_mobile=False)
+        await self.switch_context(to_mobile=False)
         await self._goto("/ar/internet/management", wait=4)
+        await self._dismiss_cookies()
 
         await self._click_text("الاشتراكات القادمة", timeout=8000)
         await asyncio.sleep(2)
 
-        ss  = await self._screenshot("verify")
+        ss = await self._screenshot("verify")
         content = await self.page.content()
 
-        if "بلس كومبو 600" not in content and "بلس كومبو" not in content:
+        if "بلس كومبو" not in content:
             return False, "باقة بلس كومبو 600 غير موجودة في الاشتراكات القادمة", ss
 
         for price, label in [("19", "19 جنيه"), ("١٩", "19 جنيه"),
                               ("28", "28 جنيه"), ("٢٨", "28 جنيه")]:
             if price in content:
-                return price in ("19", "١٩"), label, ss
+                success = price in ("19", "١٩")
+                return success, label, ss
 
-        return False, "السعر غير واضح", ss
+        return False, "السعر غير واضح في الصفحة", ss
 
     # ── Workflow كامل ────────────────────────────
 
@@ -590,7 +618,6 @@ class VodafoneAutomation:
         """
         ينفذ الخطوات 1→5 كاملة ثم يتحقق.
         progress_callback(result: StepResult) يُستدعى بعد كل خطوة.
-        يرجع قائمة StepResult.
         """
         steps = [
             self.run_step_1,
@@ -601,41 +628,37 @@ class VodafoneAutomation:
         ]
         results = []
 
-        for fn in steps:
+        for i, fn in enumerate(steps, start=1):
             try:
                 result = await fn()
             except OfferNotFoundError as e:
                 result = StepResult(
-                    step=fn.__name__[-1], success=False,
+                    step=i, success=False,
                     message=str(e),
-                    screenshot="",
                 )
             except SelectorNotFoundError as e:
                 result = StepResult(
-                    step=fn.__name__[-1], success=False,
-                    message=(
-                        f"❌ عنصر غير موجود في الصفحة\n"
-                        f"📌 التفاصيل: {e.args[0]}"
-                    ),
+                    step=i, success=False,
+                    message=f"❌ عنصر غير موجود\n📌 {e.args[0]}",
                     screenshot=e.screenshot_path,
                     interactive_elements=e.interactive_elements,
                 )
             except PageLoadError as e:
                 result = StepResult(
-                    step=fn.__name__[-1], success=False,
+                    step=i, success=False,
                     message=f"❌ فشل تحميل الصفحة\n📌 {e}",
                 )
             except Exception as e:
                 result = StepResult(
-                    step=fn.__name__[-1], success=False,
+                    step=i, success=False,
                     message=f"❌ خطأ غير متوقع: {type(e).__name__}: {e}",
                 )
 
             results.append(result)
+
             if progress_callback:
                 await progress_callback(result)
 
-            # إذا فشلت خطوة بشكل حرج، أوقف
             if not result.success:
                 break
 

@@ -2,6 +2,7 @@
 bot.py — بوت تيليجرام لأتمتة خصم فودافون مصر
 ================================================
 • واجهة زراير كاملة (بدون أوامر نصية)
+• تسجيل دخول برقم الهاتف + كلمة المرور مباشرة
 • تشغيل الخطوات 1→5 تلقائياً بدون تأكيد
 • تشخيص سبب العطل بالعربي مع صورة الشاشة
 • دعم Webhook للسيرفر + Polling للتطوير
@@ -40,7 +41,7 @@ load_dotenv()
 
 TOKEN          = os.getenv("TELEGRAM_BOT_TOKEN", "")
 HEADLESS       = os.getenv("HEADLESS", "True").lower() == "true"
-TIMEOUT        = int(os.getenv("SELECTOR_TIMEOUT", "15000"))
+TIMEOUT        = int(os.getenv("SELECTOR_TIMEOUT", "20000"))
 WEBHOOK_URL    = os.getenv("WEBHOOK_URL", "")
 WEBHOOK_PORT   = int(os.getenv("WEBHOOK_PORT", "8443"))
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
@@ -58,7 +59,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────
-STATE_PHONE, STATE_OTP = range(2)
+# حالتان للمحادثة: رقم الهاتف ثم كلمة المرور
+STATE_PHONE, STATE_PASSWORD = range(2)
 
 active_automations: dict[int, VodafoneAutomation] = {}
 
@@ -173,7 +175,10 @@ async def login_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await update.callback_query.answer()
 
-    await target.reply_text("📱 أرسل رقم هاتف فودافون (11 رقم):")
+    await target.reply_text(
+        "📱 *تسجيل الدخول*\n\nأرسل رقم هاتف فودافون (11 رقم):",
+        parse_mode="Markdown"
+    )
     return STATE_PHONE
 
 async def got_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -184,22 +189,46 @@ async def got_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return STATE_PHONE
 
-    chat_id = update.effective_chat.id
-    msg = await update.message.reply_text(
-        "⏳ جاري فتح موقع أنا فودافون وطلب كود التحقق..."
+    # حفظ رقم الهاتف مؤقتاً
+    ctx.user_data["phone"] = phone
+    await update.message.reply_text(
+        "🔐 أرسل كلمة المرور الخاصة بحساب أنا فودافون:"
+    )
+    return STATE_PASSWORD
+
+async def got_password(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    password = update.message.text.strip()
+    phone    = ctx.user_data.get("phone", "")
+    chat_id  = update.effective_chat.id
+
+    if not password:
+        await update.message.reply_text("❌ كلمة المرور فارغة. أرسلها مرة أخرى:")
+        return STATE_PASSWORD
+
+    # حذف رسالة كلمة المرور فوراً للحماية
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    msg = await ctx.bot.send_message(
+        chat_id,
+        f"⏳ جاري تسجيل الدخول برقم {phone}...\nيرجى الانتظار."
     )
 
     try:
         auto = VodafoneAutomation(headless=HEADLESS, timeout=TIMEOUT)
         await auto.start()
         active_automations[chat_id] = auto
-        ss = await auto.go_to_login(phone)
+        ss = await auto.login(phone, password)
         await msg.delete()
         await send_photo_safe(
             ctx.bot, chat_id, ss,
-            "✅ طُلب كود التحقق!\n\n🔢 أرسل الكود المكوّن من 6 أرقام:",
+            "🎉 *تم تسجيل الدخول بنجاح!*\n\nاضغط **🚀 تشغيل الطريقة** للبدء.",
+            kb_main(),
         )
-        return STATE_OTP
+        await auto.stop()
+        active_automations.pop(chat_id, None)
     except SelectorNotFoundError as e:
         await msg.delete()
         await send_photo_safe(
@@ -209,49 +238,20 @@ async def got_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             kb_error_recovery(e.interactive_elements),
         )
         await cleanup(chat_id)
-        return ConversationHandler.END
-    except Exception as e:
+    except ValueError as e:
         await msg.delete()
         await ctx.bot.send_message(
             chat_id,
-            f"❌ خطأ في الاتصال بالموقع: {e}",
+            f"❌ *{e}*\n\nتأكد من رقم الهاتف وكلمة المرور وحاول مرة أخرى.",
+            parse_mode="Markdown",
             reply_markup=kb_main(),
         )
         await cleanup(chat_id)
-        return ConversationHandler.END
-
-async def got_otp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    otp = update.message.text.strip()
-    chat_id = update.effective_chat.id
-
-    if not otp.isdigit() or len(otp) < 4:
-        await update.message.reply_text(
-            "❌ الكود غير صحيح. أرسل الكود المكوّن من 6 أرقام:"
-        )
-        return STATE_OTP
-
-    auto = active_automations.get(chat_id)
-    if not auto:
-        await update.message.reply_text("❌ الجلسة انتهت. ابدأ من جديد.")
-        return ConversationHandler.END
-
-    msg = await update.message.reply_text("⏳ جاري تسجيل الدخول...")
-    try:
-        ss = await auto.submit_otp(otp)
-        await msg.delete()
-        await send_photo_safe(
-            ctx.bot, chat_id, ss,
-            "🎉 تم تسجيل الدخول وحفظ الجلسة!\n\nاضغط **🚀 تشغيل الطريقة** للبدء.",
-            kb_main(),
-        )
-        await auto.stop()
-        active_automations.pop(chat_id, None)
     except Exception as e:
         await msg.delete()
         await ctx.bot.send_message(
             chat_id,
-            f"❌ *فشل تسجيل الدخول*\n📌 السبب: {e}",
-            parse_mode="Markdown",
+            f"❌ خطأ غير متوقع: {type(e).__name__}: {e}",
             reply_markup=kb_main(),
         )
         await cleanup(chat_id)
@@ -516,7 +516,7 @@ def main():
         ],
         states={
             STATE_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_phone)],
-            STATE_OTP:   [MessageHandler(filters.TEXT & ~filters.COMMAND, got_otp)],
+            STATE_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_password)],
         },
         fallbacks=[CommandHandler("cancel", cancel_conv)],
         allow_reentry=True,
