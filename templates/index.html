@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plus Hamo - تفعيل العرض</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-color: #050505;
+            --primary-red: #ff003c;
+            --primary-glow: rgba(255, 0, 60, 0.6);
+            --text-light: #ffffff;
+            --text-muted: #e0e0e0;
+            --input-bg: rgba(17, 17, 17, 0.85);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Cairo', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-light);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-image: 
+                radial-gradient(circle at 50% 0%, #3a000a 0%, transparent 50%),
+                radial-gradient(circle at 50% 100%, #1a0006 0%, var(--bg-color) 100%);
+            padding: 20px;
+            padding-bottom: 70px;
+        }
+
+        .cyber-container {
+            background-image: linear-gradient(rgba(10, 10, 10, 0.75), rgba(10, 10, 10, 0.85)), url('https://hamo777.iceiy.com/view.jpeg');
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            backdrop-filter: blur(15px);
+            border: 1px solid rgba(255, 0, 60, 0.4);
+            border-radius: 20px;
+            padding: 40px 30px;
+            width: 100%;
+            max-width: 500px;
+            box-shadow: 0 0 30px rgba(0,0,0,0.9), inset 0 0 20px rgba(255, 0, 60, 0.15);
+            animation: floatIn 0.8s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .cyber-container::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 50%;
+            transform: translateX(-50%);
+            width: 60%; height: 3px;
+            background: var(--primary-red);
+            box-shadow: 0 0 15px var(--primary-red);
+        }
+
+        .logo-area {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .logo-area img {
+            width: 110px;
+            height: 110px;
+            border-radius: 50%;
+            border: 3px solid var(--primary-red);
+            object-fit: cover;
+            margin-bottom: 15px;
+            box-shadow: 0 0 20px var(--primary-red), 0 0 40px rgba(255, 0, 60, 0.4);
+            animation: pulseGlowImg 2s infinite alternate;
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 900;
+            letter-spacing: 1px;
+            margin-bottom: 5px;
+            text-shadow: 0 2px 5px rgba(0,0,0,0.8);
+        }
+
+        p.subtitle {
+            color: var(--text-muted);
+            font-size: 14px;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+        }
+
+        .input-group {
+            position: relative;
+            margin-bottom: 25px;
+        }
+
+        .input-group i {
+            position: absolute;
+            right: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--primary-red);
+            font-size: 18px;
+            transition: 0.3s;
+            pointer-events: none; 
+        }
+
+        input {
+            width: 100%;
+            padding: 15px 45px 15px 15px;
+            background: var(--input-bg);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            color: white;
+            font-size: 16px;
+            outline: none;
+            transition: all 0.3s ease;
+        }
+
+        input:focus {
+            border-color: var(--primary-red);
+            box-shadow: 0 0 15px rgba(255, 0, 60, 0.3);
+            background: rgba(17, 17, 17, 0.95);
+        }
+
+        input:focus + i {
+            text-shadow: 0 0 10px var(--primary-red);
+        }
+
+        .buttons-container {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-top: 10px;
+        }
+
+        .btn-submit {
+            width: 100%;
+            padding: 16px;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: 800;
+            cursor: pointer;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 12px;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            outline: none;
+            background: rgba(255, 0, 60, 0.1);
+            color: var(--primary-red);
+            border: 2px solid var(--primary-red);
+        }
+
+        .btn-submit:hover {
+            background: var(--primary-red);
+            color: #fff;
+            box-shadow: 0 0 20px var(--primary-glow), 0 0 40px var(--primary-glow);
+            transform: translateY(-3px);
+        }
+        .btn-submit:active { transform: translateY(1px); }
+        .btn-submit.btn-loading {
+            background: var(--primary-red); color: #fff;
+            box-shadow: 0 0 20px var(--primary-glow);
+            pointer-events: none; opacity: 0.85; transform: translateY(0);
+        }
+
+        .terminal-box {
+            margin-top: 30px;
+            background: rgba(10, 10, 10, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 15px;
+            max-height: 350px;
+            overflow-y: auto;
+            display: none; /* مخفي افتراضياً ويظهر عند بدء العملية */
+            flex-direction: column;
+            gap: 10px;
+            font-size: 15px;
+            font-weight: 600;
+        }
+        .terminal-box::-webkit-scrollbar { width: 6px; }
+        .terminal-box::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 10px; }
+        .terminal-box::-webkit-scrollbar-thumb:hover { background: var(--primary-red); }
+
+        .log-entry {
+            display: flex;
+            align-items: flex-start;
+            justify-content: flex-start;
+            gap: 10px;
+            padding: 12px;
+            border-radius: 8px;
+            background: rgba(20, 20, 20, 0.9);
+            border-right: 3px solid transparent;
+            animation: slideIn 0.3s ease-out forwards;
+            line-height: 1.6;
+        }
+        .log-entry i { width: 20px; text-align: center; font-size: 18px; margin-top: 3px; }
+        .log-entry.info { border-color: #2196F3; }
+        .log-entry.info i { color: #2196F3; text-shadow: 0 0 10px #2196F3; }
+        .log-entry.success { border-color: #00e676; color: #fff; background: rgba(0, 230, 118, 0.1); }
+        .log-entry.success i { color: #00e676; text-shadow: 0 0 10px #00e676; }
+        .log-entry.error { border-color: #ff1744; color: #ffebee; background: rgba(255, 23, 68, 0.1); }
+        .log-entry.error i { color: #ff1744; text-shadow: 0 0 10px #ff1744; }
+
+        @keyframes floatIn {
+            0% { opacity: 0; transform: translateY(30px) scale(0.95); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes pulseGlowImg {
+            0% { box-shadow: 0 0 10px var(--primary-red); transform: scale(1); }
+            100% { box-shadow: 0 0 25px var(--primary-red), 0 0 50px rgba(255, 0, 60, 0.6); transform: scale(1.03); }
+        }
+        @keyframes slideIn {
+            0% { opacity: 0; transform: translateY(-10px); }
+            100% { opacity: 1; transform: translateY(0); }
+        }
+
+        @media (max-width: 480px) {
+            .cyber-container { padding: 30px 20px; border-radius: 15px; }
+            h1 { font-size: 20px; }
+            .btn-submit { font-size: 15px; padding: 14px; }
+            .terminal-box { font-size: 13px; max-height: 300px; }
+            .logo-area img { width: 90px; height: 90px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="cyber-container">
+        <div class="logo-area">
+            <img src="https://hamo777.iceiy.com/vodafone5vip24hamo.gif" alt="الشعار">
+            <h1>Plus Hamo</h1>
+            <p class="subtitle">تفعيل باقة 4.5G بالحصول على أفضل خصم متاح</p>
+        </div>
+
+        <form id="activationForm" onsubmit="event.preventDefault(); startActivation();">
+            <div class="input-group">
+                <input type="text" name="number" id="phoneNum" placeholder="رقم الهاتف (مثال: 010...)" required>
+                <i class="fa-solid fa-phone"></i>
+            </div>
+            
+            <div class="input-group">
+                <input type="password" name="password" id="passCode" placeholder="كلمة المرور الخاصة بـ أنا فودافون" required>
+                <i class="fa-solid fa-lock"></i>
+            </div>
+
+            <div class="buttons-container">
+                <button type="submit" class="btn-submit" id="submitBtn">
+                    <i class="fa-solid fa-bolt" id="btnIcon"></i>
+                    <span id="btnText">تفعيل العرض</span>
+                </button>
+            </div>
+        </form>
+
+        <div class="terminal-box" id="logTerminal">
+            <!-- اللوجات ستظهر هنا تلقائياً -->
+        </div>
+    </div>
+
+    <style>
+    .mobile-footer {
+      position: fixed; bottom: 0; left: 0; width: 100%;
+      background: transparent; display: flex;
+      justify-content: center; align-items: center;
+      padding: 8px 0; z-index: 999;
+    }
+    .mobile-footer a {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 13px; font-weight: bold; color: #fff; text-decoration: none;
+      background: linear-gradient(135deg,#00d4ff,#0077ff);
+      padding: 8px 16px; border-radius: 30px;
+      box-shadow: 0 0 12px rgba(0,212,255,0.6); transition: 0.3s ease-in-out;
+    }
+    .mobile-footer a:hover {
+      background: linear-gradient(135deg,#0077ff,#00d4ff);
+      box-shadow: 0 0 18px rgba(0,212,255,0.9); transform: scale(1.05);
+    }
+    .mobile-footer a svg { width: 18px; height: 18px; fill: #fff; }
+    </style>
+    <div class="mobile-footer">
+      <a href="https://t.me/Mohamed891846" target="_blank">
+        <svg viewBox="0 0 24 24"><path d="M9.9999 16.2L9.8749 19.5C10.1249 19.5 10.2374 19.3875 10.3749 19.275L11.9999 17.775L15.3749 20.2875C15.9999 20.6625 16.4999 20.4375 16.6624 19.65L19.9499 4.53748C20.1749 3.52498 19.5499 3.07498 18.8999 3.34998L3.4499 9.29998C2.4624 9.69998 2.4749 10.2749 3.2749 10.5249L7.2749 11.7749L16.1749 6.22498C16.5999 5.97498 16.9874 6.11248 16.6624 6.37498L9.9999 16.2Z"></path></svg>
+        انضم لقناة الموقع لمتابعة المزيد
+      </a>
+    </div>
+
+    <script>
+        let eventSource = null;
+
+        function startActivation() {
+            const btn = document.getElementById('submitBtn');
+            const icon = document.getElementById('btnIcon');
+            const text = document.getElementById('btnText');
+            const terminal = document.getElementById('logTerminal');
+            
+            const number = document.getElementById('phoneNum').value.trim();
+            const password = document.getElementById('passCode').value.trim();
+
+            if (!number || !password) return;
+
+            // تفعيل حالة التحميل
+            btn.classList.add('btn-loading');
+            icon.className = 'fa-solid fa-circle-notch fa-spin';
+            text.innerText = 'جاري التفعيل...';
+            
+            // إظهار وتنظيف صندوق اللوجات
+            terminal.style.display = 'flex';
+            terminal.innerHTML = '';
+
+            addLog('info', 'بدء الاتصال بالسيرفر لتشغيل عملية التفعيل...');
+
+            // إنشاء اتصال SSE للبث المباشر
+            const url = `/stream?number=${encodeURIComponent(number)}&password=${encodeURIComponent(password)}`;
+            
+            if (eventSource) eventSource.close();
+            
+            eventSource = new EventSource(url);
+
+            eventSource.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    if (data.status === 'done') {
+                        addLog('success', data.message);
+                        resetButton();
+                        eventSource.close();
+                    } else if (data.status === 'error') {
+                        addLog('error', data.message);
+                        resetButton();
+                        eventSource.close();
+                    } else {
+                        addLog(data.type || 'info', data.message);
+                    }
+                } catch (e) {
+                    addLog('info', event.data);
+                }
+            };
+
+            eventSource.onerror = function() {
+                addLog('error', 'انقطع الاتصال بالسيرفر أو انتهت العملية.');
+                resetButton();
+                eventSource.close();
+            };
+        }
+
+        function addLog(type, message) {
+            const terminal = document.getElementById('logTerminal');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            
+            let iconClass = 'fa-circle-info';
+            if (type === 'success') iconClass = 'fa-circle-check';
+            if (type === 'error') iconClass = 'fa-circle-xmark';
+
+            entry.innerHTML = `<i class="fa-solid ${iconClass}"></i> <span>${message}</span>`;
+            terminal.appendChild(entry);
+            terminal.scrollTop = terminal.scrollHeight;
+        }
+
+        function resetButton() {
+            const btn = document.getElementById('submitBtn');
+            const icon = document.getElementById('btnIcon');
+            const text = document.getElementById('btnText');
+            btn.classList.remove('btn-loading');
+            icon.className = 'fa-solid fa-bolt';
+            text.innerText = 'تفعيل العرض';
+        }
+    </script>
+</body>
+</html>
