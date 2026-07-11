@@ -242,66 +242,98 @@ class VodafoneAutomation:
 
     async def login(self, phone: str, password: str) -> str:
         """
-        يسجّل الدخول برقم الهاتف وكلمة المرور مباشرة.
-        يرجع مسار لقطة الشاشة بعد الدخول.
+        يسجّل الدخول برقم الهاتف وكلمة المرور.
+        يضغط على أيقونة الحساب → يتحول لصفحة Keycloak → يملأ البيانات.
         """
         await self._create_context(is_mobile=False)
         await self._goto("/ar/home", wait=3)
         await self._dismiss_cookies()
 
-        # ── محاولة فتح صفحة الدخول ──
-        login_opened = False
+        # ── الخطوة 1: الضغط على أيقونة الحساب (الشخص) لفتح صفحة الدخول ──
+        login_triggered = False
 
-        # طريقة 1: رابط مباشر لصفحة الدخول
-        try:
-            await self.page.goto(
-                f"{self.base_url}/ar/my-account/login",
-                wait_until="domcontentloaded", timeout=8000
-            )
-            await asyncio.sleep(2)
-            login_opened = True
-        except Exception:
-            pass
+        # محاولة النقر على أيقونة الحساب بعدة طرق
+        icon_selectors = [
+            "a[href*='login']",
+            "a[href*='myHome']",
+            ".login-icon",
+            ".user-icon",
+            "header .icon-user",
+            "[class*='login']",
+            "[class*='account']",
+            # أيقونة الشخص عادة SVG أو span بجانب اليمين/اليسار
+            "header a:last-of-type",
+            "nav a:last-of-type",
+        ]
 
-        # طريقة 2: الضغط على أيقونة الحساب أو كلمة دخول
-        if not login_opened:
-            selectors_to_try = [
-                "a[href*='login']",
-                ".profile-icon", ".user-icon",
-                "header .icon-user",
-                "header button:has-text('دخول')",
-                "header a:has-text('دخول')",
-                ".login-link",
-            ]
-            for sel in selectors_to_try:
-                if await self._click_selector(sel, timeout=2000):
+        for sel in icon_selectors:
+            try:
+                loc = self.page.locator(sel).first
+                if await loc.is_visible(timeout=1500):
+                    await loc.click()
                     await asyncio.sleep(2)
-                    login_opened = True
+                    login_triggered = True
+                    logger.info(f"Clicked login icon via: {sel}")
+                    break
+            except Exception:
+                pass
+
+        # لو ما نجح، جرب بالنص
+        if not login_triggered:
+            for txt in ["دخول", "تسجيل الدخول", "حسابي", "Login"]:
+                if await self._click_text(txt, timeout=3000):
+                    await asyncio.sleep(2)
+                    login_triggered = True
                     break
 
-            if not login_opened:
-                await self._click_text("دخول", timeout=4000)
-                await asyncio.sleep(2)
+        # ── الخطوة 2: انتظر إعادة التوجيه لصفحة Keycloak ──
+        # نتحقق أن الـ URL تغيّر لصفحة auth
+        try:
+            await self.page.wait_for_url(
+                lambda url: "openid-connect" in url or "auth/realms" in url or "login" in url,
+                timeout=10000
+            )
+            await asyncio.sleep(2)
+            logger.info(f"Redirected to login page: {self.page.url}")
+        except Exception:
+            # لو ما صار redirect تلقائي، جرب navigate مباشرة
+            logger.info("No redirect detected, trying direct navigation...")
+            # أول خطوة: روح للهوم وبعدين اضغط على الرابط
+            try:
+                # استخرج رابط الدخول من الصفحة
+                href = await self.page.evaluate("""() => {
+                    const links = [...document.querySelectorAll('a')];
+                    const loginLink = links.find(a =>
+                        a.href.includes('login') ||
+                        a.href.includes('auth') ||
+                        a.href.includes('myHome')
+                    );
+                    return loginLink ? loginLink.href : null;
+                }""")
+                if href:
+                    await self.page.goto(href, wait_until="domcontentloaded", timeout=10000)
+                    await asyncio.sleep(2)
+            except Exception:
+                pass
 
-        await self._dismiss_cookies()
-
-        # ── إدخال رقم الهاتف ──
+        # ── الخطوة 3: ملء حقل رقم الهاتف (username) ──
+        # Keycloak يستخدم input[name='username'] أو input#username
         phone_selectors = [
             "input[name='username']",
             "input#username",
-            "input#mobileNum",
-            "input[placeholder*='رقم']",
-            "input[placeholder*='هاتف']",
-            "input[type='tel']",
+            "input#kc-form-login",
+            "input[autocomplete='username']",
             "input[type='text']:visible",
+            "input[type='tel']",
         ]
+
         phone_filled = False
         for sel in phone_selectors:
             try:
-                await self.page.wait_for_selector(sel, timeout=5000)
+                await self.page.wait_for_selector(sel, state="visible", timeout=8000)
                 await self.page.fill(sel, phone)
                 phone_filled = True
-                logger.info(f"Phone filled using: {sel}")
+                logger.info(f"Phone filled with selector: {sel}")
                 break
             except Exception:
                 continue
@@ -310,41 +342,28 @@ class VodafoneAutomation:
             ss = await self._screenshot("login_no_phone_field")
             els = await self.get_interactive_elements()
             raise SelectorNotFoundError(
-                "لم يُعثَر على حقل رقم الهاتف في صفحة تسجيل الدخول",
+                "لم يُعثَر على حقل رقم الهاتف في صفحة تسجيل الدخول\n"
+                "تأكد أن الضغط على أيقونة الحساب يفتح صفحة الدخول",
                 ss, els,
             )
 
         await asyncio.sleep(0.5)
 
-        # ── النقر على "التالي" أو "متابعة" ──
-        next_clicked = False
-        for txt in ["التالي", "متابعة", "Continue", "Next"]:
-            if await self._click_text(txt, timeout=3000):
-                next_clicked = True
-                await asyncio.sleep(2)
-                break
-
-        if not next_clicked:
-            for sel in ["button[type='submit']", "button.next-btn", ".btn-primary"]:
-                if await self._click_selector(sel, timeout=2000):
-                    await asyncio.sleep(2)
-                    break
-
-        # ── إدخال كلمة المرور ──
+        # ── الخطوة 4: ملء كلمة المرور ──
         password_selectors = [
             "input[name='password']",
             "input#password",
             "input[type='password']",
-            "input[placeholder*='كلمة']",
-            "input[placeholder*='password']",
+            "input[autocomplete='current-password']",
         ]
+
         password_filled = False
         for sel in password_selectors:
             try:
-                await self.page.wait_for_selector(sel, timeout=8000)
+                await self.page.wait_for_selector(sel, state="visible", timeout=5000)
                 await self.page.fill(sel, password)
                 password_filled = True
-                logger.info(f"Password filled using: {sel}")
+                logger.info(f"Password filled with selector: {sel}")
                 break
             except Exception:
                 continue
@@ -359,32 +378,47 @@ class VodafoneAutomation:
 
         await asyncio.sleep(0.5)
 
-        # ── تسجيل الدخول ──
-        submit_clicked = False
-        for txt in ["دخول", "تسجيل الدخول", "Login", "Sign In"]:
-            if await self._click_text(txt, timeout=3000):
-                submit_clicked = True
-                await asyncio.sleep(3)
+        # ── الخطوة 5: تسجيل الدخول ──
+        # Keycloak زر الدخول عادة: input[type='submit'] أو button[type='submit']
+        submit_selectors = [
+            "input[type='submit']",
+            "button[type='submit']",
+            "#kc-login",
+            ".btn-primary",
+        ]
+        submitted = False
+        for sel in submit_selectors:
+            try:
+                await self.page.wait_for_selector(sel, timeout=3000)
+                await self.page.click(sel)
+                submitted = True
                 break
+            except Exception:
+                continue
 
-        if not submit_clicked:
-            for sel in ["button[type='submit']", ".login-btn", ".btn-login"]:
-                if await self._click_selector(sel, timeout=2000):
-                    await asyncio.sleep(3)
+        if not submitted:
+            # جرب بالنص
+            for txt in ["دخول", "تسجيل الدخول", "Login", "Sign In", "إرسال"]:
+                if await self._click_text(txt, timeout=3000):
+                    submitted = True
                     break
 
-        # ── التحقق من نجاح الدخول ──
-        await asyncio.sleep(3)
+        # ── الخطوة 6: انتظار إتمام الدخول ──
+        await asyncio.sleep(4)
+
+        # تحقق من نجاح الدخول (نرجع لصفحة الهوم بعد الدخول)
+        current_url = self.page.url
         content = await self.page.content()
 
-        if "خطأ" in content or "غير صحيح" in content or "incorrect" in content.lower():
-            raise ValueError("رقم الهاتف أو كلمة المرور غير صحيحة")
+        if "خطأ" in content or "غير صحيح" in content or "Invalid" in content:
+            raise ValueError("رقم الهاتف أو كلمة المرور غير صحيحة — تأكد من البيانات وحاول مرة أخرى")
 
         await self.save_state()
-        logger.info("Login successful!")
+        logger.info(f"Login done. Current URL: {current_url}")
         return await self._screenshot("after_login")
 
     # ── الخطوات الخمس ───────────────────────────
+
 
     async def _subscribe_plus_combo(self) -> bool:
         """يشترك في بلس كومبو 600 — يُستخدم في الخطوتين 1 و3."""
