@@ -218,18 +218,58 @@ class VodafoneAutomation:
         if self.is_mobile:
             await self._create_context(is_mobile=False)
 
-        await self._goto("/ar/home", wait=2)
+        await self._goto("/ar/home", wait=3)
 
-        # زر دخول
-        await self._click_text("دخول", timeout=6000)
-        await asyncio.sleep(1.5)
+        # 1. إغلاق أو قبول الكوكيز إذا ظهرت
+        for cookie_btn in ["قبول كل الملفات", "قبول", "Accept All", "reject", "رفض"]:
+            try:
+                if await self._click_text(cookie_btn, timeout=2000):
+                    await asyncio.sleep(1)
+                    break
+            except Exception:
+                pass
+
+        # 2. الضغط على أيقونة الحساب (شكل الشخص أعلى اليسار) أو كلمة دخول
+        # سنجرب الضغط على أيقونة الشخص عبر الكلاس أو الرول أو النص
+        profile_clicked = False
+        profile_selectors = [
+            ".profile-icon", "a.login-btn", "a[href*='login']",
+            "header i.icon-user", "header .user-icon", ".nav-link:has-text('دخول')",
+            "header a:has-text('دخول')"
+        ]
+        
+        # جرب الضغط بالنص أولاً
+        if await self._click_text("دخول", timeout=3000):
+            profile_clicked = True
+            await asyncio.sleep(1.5)
+            
+        if not profile_clicked:
+            for selector in profile_selectors:
+                try:
+                    loc = self.page.locator(selector).first
+                    if await loc.is_visible(timeout=1500):
+                        await loc.click()
+                        profile_clicked = True
+                        await asyncio.sleep(2)
+                        break
+                except Exception:
+                    pass
+
+        # لو لم يفلح أي مما سبق، سنضغط على الأيقونة بناء على إحداثياتها أو ننتقل لصفحة الدخول مباشرة
+        if not profile_clicked:
+            try:
+                # محاولة الانتقال لصفحة تسجيل الدخول مباشرة بالرابط
+                await self.page.goto(f"{self.base_url}/ar/home?login=true", timeout=8000)
+                await asyncio.sleep(2)
+            except Exception:
+                pass
 
         # حقل الهاتف
         phone_sel = ("input[name='username'],input#username,"
                      "input#mobileNum,input[placeholder*='رقم'],"
                      "input[type='tel']")
         try:
-            await self.page.wait_for_selector(phone_sel, timeout=8000)
+            await self.page.wait_for_selector(phone_sel, timeout=10000)
             await self.page.fill(phone_sel, phone)
         except PlaywrightTimeoutError:
             raise SelectorNotFoundError(
