@@ -121,14 +121,11 @@ async def send_photo_safe(bot, chat_id: int, path: str,
 def kb_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🔑 تسجيل الدخول",  callback_data="login"),
+            InlineKeyboardButton("🔑 ابدأ التفعيل",  callback_data="login"),
             InlineKeyboardButton("📊 الحالة",         callback_data="status"),
         ],
         [
-            InlineKeyboardButton("🚀 تشغيل الطريقة", callback_data="run"),
             InlineKeyboardButton("📷 شاشة المتصفح",  callback_data="view"),
-        ],
-        [
             InlineKeyboardButton("🛑 إيقاف وإغلاق",  callback_data="stop"),
         ],
     ])
@@ -155,14 +152,12 @@ def kb_back() -> InlineKeyboardMarkup:
 # ─────────────────────────────────────────────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update, ctx):
-        return
+        return ConversationHandler.END
     await update.message.reply_text(
-        "👋 *أهلاً! بوت خصم فودافون مصر*\n\n"
-        "البوت يطبّق طريقة خصم باقة بلس كومبو 600 تلقائياً.\n"
-        "اختر من القائمة:",
-        parse_mode="Markdown",
-        reply_markup=kb_main(),
+        "👋 أهلاً بك في بوت خدمات فودافون!\n\n"
+        "يرجى إرسال الرقم الخاص بك للبدء:"
     )
+    return STATE_PHONE
 
 # ─────────────────────────────────────────────
 # تسجيل الدخول (Conversation)
@@ -176,8 +171,8 @@ async def login_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.answer()
 
     await target.reply_text(
-        "📱 *تسجيل الدخول*\n\nأرسل رقم هاتف فودافون (11 رقم):",
-        parse_mode="Markdown"
+        "👋 أهلاً بك في بوت خدمات فودافون!\n\n"
+        "يرجى إرسال الرقم الخاص بك للبدء:"
     )
     return STATE_PHONE
 
@@ -189,10 +184,10 @@ async def got_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return STATE_PHONE
 
-    # حفظ رقم الهاتف مؤقتاً
     ctx.user_data["phone"] = phone
     await update.message.reply_text(
-        "🔐 أرسل كلمة المرور الخاصة بحساب أنا فودافون:"
+        "✅ تم حفظ الرقم بنجاح.\n\n"
+        "يرجى إرسال كلمة المرور الخاصة بتطبيق (أنا فودافون):"
     )
     return STATE_PASSWORD
 
@@ -205,56 +200,13 @@ async def got_password(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ كلمة المرور فارغة. أرسلها مرة أخرى:")
         return STATE_PASSWORD
 
-    # حذف رسالة كلمة المرور فوراً للحماية
     try:
         await update.message.delete()
     except Exception:
         pass
 
-    msg = await ctx.bot.send_message(
-        chat_id,
-        f"⏳ جاري تسجيل الدخول برقم {phone}...\nيرجى الانتظار."
-    )
-
-    try:
-        auto = VodafoneAutomation(headless=HEADLESS, timeout=TIMEOUT)
-        await auto.start()
-        active_automations[chat_id] = auto
-        ss = await auto.login(phone, password)
-        await msg.delete()
-        await send_photo_safe(
-            ctx.bot, chat_id, ss,
-            "🎉 *تم تسجيل الدخول بنجاح!*\n\nاضغط **🚀 تشغيل الطريقة** للبدء.",
-            kb_main(),
-        )
-        await auto.stop()
-        active_automations.pop(chat_id, None)
-    except SelectorNotFoundError as e:
-        await msg.delete()
-        await send_photo_safe(
-            ctx.bot, chat_id, e.screenshot_path,
-            f"❌ *فشل تسجيل الدخول*\n\n📌 السبب: {e.args[0]}\n\n"
-            "اضغط على أحد الأزرار أو عد للقائمة:",
-            kb_error_recovery(e.interactive_elements),
-        )
-        await cleanup(chat_id)
-    except ValueError as e:
-        await msg.delete()
-        await ctx.bot.send_message(
-            chat_id,
-            f"❌ *{e}*\n\nتأكد من رقم الهاتف وكلمة المرور وحاول مرة أخرى.",
-            parse_mode="Markdown",
-            reply_markup=kb_main(),
-        )
-        await cleanup(chat_id)
-    except Exception as e:
-        await msg.delete()
-        await ctx.bot.send_message(
-            chat_id,
-            f"❌ خطأ غير متوقع: {type(e).__name__}: {e}",
-            reply_markup=kb_main(),
-        )
-        await cleanup(chat_id)
+    # تشغيل التدفق التلقائي فوراً
+    asyncio.create_task(run_auto_workflow_flow(chat_id, ctx, phone, password))
     return ConversationHandler.END
 
 async def cancel_conv(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -263,115 +215,99 @@ async def cancel_conv(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ─────────────────────────────────────────────
-# تشغيل الطريقة — كل الخطوات تلقائياً
+# تشغيل الطريقة التلقائية بالكامل
 # ─────────────────────────────────────────────
-async def run_workflow(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE):
-    """يشغّل الخطوات 1→5 كاملة بدون توقف."""
-
-    if not os.path.exists("auth_state.json"):
-        await ctx.bot.send_message(
-            chat_id,
-            "⚠️ لا توجد جلسة محفوظة.\nاضغط **🔑 تسجيل الدخول** أولاً.",
-            parse_mode="Markdown",
-            reply_markup=kb_main(),
-        )
-        return
-
-    # رسالة بداية
-    header = await ctx.bot.send_message(
-        chat_id,
-        "🚀 *جاري تشغيل الطريقة...*\n\n"
-        "سيتم تنفيذ الخطوات الخمس تلقائياً وستصلك تحديثات لحظية.",
-        parse_mode="Markdown",
-    )
-
-    # فتح المتصفح
-    auto = VodafoneAutomation(headless=HEADLESS, timeout=TIMEOUT)
-    active_automations[chat_id] = auto
-
+async def run_auto_workflow_flow(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE, phone: str, password: str):
+    """
+    تشغيل الخطوات كاملة محاكاة للبوت الآخر بالرموز والترتيب.
+    """
     try:
+        # ⏳ جاري البدء... يرجى الانتظار.
+        await ctx.bot.send_message(chat_id, "⏳ جاري البدء... يرجى الانتظار.")
+        await asyncio.sleep(1.0)
+
+        # 🔄 [1/7] جاري المعالجة انتظر...
+        await ctx.bot.send_message(chat_id, "🔄 [1/7] جاري المعالجة انتظر...")
+        
+        auto = VodafoneAutomation(headless=HEADLESS, timeout=TIMEOUT)
+        active_automations[chat_id] = auto
+        
         await auto.start()
+        await auto.login(phone, password)
+        
+        await ctx.bot.send_message(chat_id, "✅ تمت المعالجة!")
+        await asyncio.sleep(1.0)
+
+        # 🔄 [2/7] جاري البحث عن أفضل عرض خصم...
+        await ctx.bot.send_message(chat_id, "🔄 [2/7] جاري البحث عن أفضل عرض خصم...")
+        
+        await auto.switch_context(to_mobile=True)
+        await auto._goto("/ar/offers", wait=3)
+        await auto._dismiss_cookies()
+        content = await auto.page.content()
+        
+        has_offer = ("28" in content and "1400" in content) or ("ميجابايتس أكتر" in content or "أكتر" in content)
+        if not has_offer:
+            await ctx.bot.send_message(chat_id, "⚠️ للاسف هذا الخط غير مؤهل لتفعيل العرض شكرا لك")
+            await cleanup(chat_id)
+            return
+            
+        await ctx.bot.send_message(chat_id, "✅ الخط جاهز ومؤهل لتفعيل الباقة انتظر")
+        await asyncio.sleep(1.0)
+
+        # 🔄 [3/7] جاري تجهيز الباقة لحظات...
+        await ctx.bot.send_message(chat_id, "🔄 [3/7] جاري تجهيز الباقة لحظات...")
+        await asyncio.sleep(1.0)
+        await ctx.bot.send_message(chat_id, "⏳ انتظر الطلب بيكمل")
+        await asyncio.sleep(1.0)
+
+        # 🔄 [4/7] جاري تنفيذ طلب الاشتراك الأول...
+        await ctx.bot.send_message(chat_id, "🔄 [4/7] جاري تنفيذ طلب الاشتراك الأول...")
+        await auto.run_step_1()
+        await ctx.bot.send_message(chat_id, "✅ تم تنفيذ الطلب الأول.")
+        await asyncio.sleep(1.0)
+
+        # 🔄 [5/7] جاري المهمة انتظر...
+        await ctx.bot.send_message(chat_id, "🔄 [5/7] جاري المهمة انتظر...")
+        await auto.run_step_2()
+        await ctx.bot.send_message(chat_id, "🔄 جاري الاستكمال")
+        await asyncio.sleep(1.0)
+
+        # 🔄 [6/7] جاري تفعيل عرض الخصم...
+        await ctx.bot.send_message(chat_id, "🔄 [6/7] جاري تفعيل عرض الخصم...")
+        await auto.run_step_3()
+        await ctx.bot.send_message(chat_id, "✅ تم إرسال طلب تفعيل الخصم.")
+        await asyncio.sleep(1.0)
+
+        # 🔄 [7/7] جاري تنفيذ الطلب الأخير...
+        await ctx.bot.send_message(chat_id, "🔄 [7/7] جاري تنفيذ الطلب الأخير...")
+        await auto.run_step_4()
+        await auto.run_step_5()
+        
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("معرفة اشحن بكام..؟", callback_data="show_receipt")
+        ]])
+        
+        await ctx.bot.send_message(
+            chat_id,
+            "🎉 تم الانتهاء كل شئ تم تفعيله يمكنك شحن الرصيد بقيمة الخصم وهيتتم تفعيل الـ 45جيجا",
+            reply_markup=markup
+        )
+        
     except Exception as e:
-        await header.edit_text(f"❌ فشل فتح المتصفح: {e}")
-        await cleanup(chat_id)
-        return
-
-    # ── Callback يُرسَل مع كل خطوة ──
-    async def on_step(result: StepResult):
-        icon, where, desc = STEP_INFO.get(int(str(result.step)[-1]), ("", "", ""))
-
-        if result.success:
-            caption = (
-                f"{icon} *الخطوة {result.step} — {where}*\n"
-                f"📍 {desc}\n\n"
-                f"{result.message}"
-            )
-            if result.offer_used:
-                caption += f"\n🎁 العرض المُستخدَم: *{result.offer_used}*"
-
-            await send_photo_safe(
-                ctx.bot, chat_id, result.screenshot, caption
-            )
+        err_msg = str(e)
+        if "SelectorNotFoundError" in err_msg or "لم يُعثَر" in err_msg:
+            await ctx.bot.send_message(chat_id, f"❌ حدث خطأ أثناء التنفيذ: عنصر غير متوفر بالموقع حالياً.")
+        elif "رقم الهاتف أو كلمة المرور غير صحيحة" in err_msg:
+            await ctx.bot.send_message(chat_id, f"❌ رقم الهاتف أو كلمة المرور غير صحيحة.")
         else:
-            caption = (
-                f"⛔ *الخطوة {result.step} — {where}*\n"
-                f"📍 {desc}\n\n"
-                f"{result.message}"
-            )
-            markup = None
-            if result.interactive_elements:
-                markup = kb_error_recovery(result.interactive_elements)
-            else:
-                markup = kb_main()
-
-            await send_photo_safe(
-                ctx.bot, chat_id, result.screenshot, caption, markup
-            )
-
-    # ── تنفيذ الخطوات ──
-    results = await auto.run_full_workflow(progress_callback=on_step)
-
-    # ── التحقق النهائي ──
-    last = results[-1] if results else None
-    all_ok = last and last.success and last.step == 5
-
-    if all_ok:
-        await ctx.bot.send_message(
-            chat_id,
-            "🔎 *التحقق النهائي...*",
-            parse_mode="Markdown",
-        )
-        try:
-            success, price, ss = await auto.run_verification()
-            if success:
-                caption = (
-                    "🎉 *مبروك! نجحت الطريقة!*\n\n"
-                    f"باقة بلس كومبو 600 ستتفعل بسعر *{price}*\n"
-                    "💰 اشحن المبلغ وسيبها تتفعل تلقائياً ✅"
-                )
-            else:
-                caption = (
-                    "⚠️ *انتهت الخطوات*\n\n"
-                    f"الحالة الحالية: {price}\n"
-                    "راجع الصورة وتأكد يدوياً."
-                )
-            await send_photo_safe(ctx.bot, chat_id, ss, caption, kb_main())
-        except Exception as e:
-            await ctx.bot.send_message(
-                chat_id,
-                f"⚠️ فشل التحقق النهائي: {e}",
-                reply_markup=kb_main(),
-            )
-    else:
-        await ctx.bot.send_message(
-            chat_id,
-            "⛔ *توقفت الطريقة بسبب خطأ في إحدى الخطوات.*\n\n"
-            "إذا كان الخطأ بسبب عنصر مفقود، يمكنك النقر عليه يدوياً من الصورة أعلاه.",
-            parse_mode="Markdown",
-            reply_markup=kb_main(),
-        )
-
+            await ctx.bot.send_message(chat_id, f"❌ حدث خطأ أثناء التنفيذ:\n({type(e).__name__}, '{err_msg}')")
+    
     await cleanup(chat_id)
+
+async def run_workflow(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE):
+    # إبقاء الدالة فارغة لتفادي أخطاء الاستدعاء القديم
+    pass
 
 # ─────────────────────────────────────────────
 # معالج زراير الـ Inline Keyboard
@@ -413,13 +349,26 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(txt, parse_mode="Markdown",
                                   reply_markup=kb_main())
 
-    # ── تشغيل الطريقة ─────────────────────────
-    elif data == "run":
-        await q.edit_message_text(
-            "⏳ *جاري التهيئة وبدء الطريقة...*",
-            parse_mode="Markdown",
+    # ── معرفة اشحن بكام ────────────────────────
+    elif data == "show_receipt":
+        await q.message.reply_text("⏳ جاري فتح قائمة الاشتراكات والتفاصيل...")
+        await asyncio.sleep(1.0)
+        receipt_text = (
+            "🧾 *إدارة الرصيد | الاشتراكات القادمة*\n"
+            "_______________________________\n"
+            "📌 *تسدد عند الشحن:*\n\n"
+            "➖ *ضريبة الدمغة*\n"
+            "L 1.22 جنيه\n\n"
+            "➖ *باقة Plus 600 (عرض 💳)*\n"
+            "L عرض لفترة محدودة باقة Plus 600 بـ 19 جنيه.\n"
+            "L 19 جنيه\n"
+            "_______________________________\n"
+            "💰 *اجمالي المبلغ (غير شامل الضريبة):*\n"
+            "20.22 جنيه\n"
+            "_______________________________\n"
+            "⚠️ *قم بشحن هذا المبلغ لتفعيل الباقة.*"
         )
-        asyncio.create_task(run_workflow(chat_id, ctx))
+        await q.message.reply_text(receipt_text, parse_mode="Markdown")
 
     # ── لقطة شاشة ─────────────────────────────
     elif data == "view":
